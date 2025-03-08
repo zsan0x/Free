@@ -8,6 +8,10 @@ module.exports = {
     guide: "{prefix}guessflag"
   },
   onStart: async function ({ message, api }) {
+    const fs = require("fs");
+    const path = require("path");
+    const axios = require("axios");
+    
     // Comprehensive list of countries with their flag image URLs and names
     const countries = [
       { flag: "https://flagcdn.com/w320/af.png", name: "Afghanistan" },
@@ -209,15 +213,41 @@ module.exports = {
     // Select a random country
     const randomCountry = countries[Math.floor(Math.random() * countries.length)];
     
+    // Create a temporary directory for storing the flag image if it doesn't exist
+    const tempDir = path.join(__dirname, "temp");
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+    
     // Send a message indicating the game is starting
     await message.reply("🎮 **Guess the Country Game** 🎮\n\nI'll send you a flag image. Guess which country it belongs to!");
     
-    // Download and send the flag image
+    // Download and send the flag image using axios and fs
     try {
-      const flagImage = await global.utils.getStreamFromURL(randomCountry.flag);
-      if (!flagImage) {
-        return message.reply("❌ Sorry, I couldn't load the flag image. Please try again later.");
-      }
+      // Generate a unique filename for the flag image
+      const flagFileName = path.join(tempDir, `flag_${Date.now()}.png`);
+      
+      // Download the flag image using axios
+      const response = await axios({
+        method: 'GET',
+        url: randomCountry.flag,
+        responseType: 'stream'
+      });
+      
+      // Create a write stream to save the image
+      const writer = fs.createWriteStream(flagFileName);
+      
+      // Pipe the image data to the file
+      response.data.pipe(writer);
+      
+      // Wait for the download to complete
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+      
+      // Read the file as a stream to send
+      const flagImage = fs.createReadStream(flagFileName);
       
       // Send the image and prompt
       await api.sendMessage({
@@ -247,18 +277,29 @@ module.exports = {
         // Check if the answer is correct or close
         if (acceptableAnswers.includes(userAnswer)) {
           message.reply(`🎉 Correct! That's the flag of ${randomCountry.name}!`);
+          
+          // Clean up the temporary file
+          cleanupTempFile(flagFileName);
+          
           return messageCollector.stop();
         } else if (acceptableAnswers.some(answer => 
           (answer.includes(userAnswer) && userAnswer.length > 3) || 
           (userAnswer.includes(answer) && answer.length > 3)
         )) {
           message.reply(`🎉 Close enough! That's the flag of ${randomCountry.name}!`);
+          
+          // Clean up the temporary file
+          cleanupTempFile(flagFileName);
+          
           return messageCollector.stop();
         }
       });
       
       // Handle when time runs out
       messageCollector.on("end", (collected) => {
+        // Clean up the temporary file
+        cleanupTempFile(flagFileName);
+        
         if (collected.size === 0) {
           message.reply(`⏱️ Time's up! The correct answer was ${randomCountry.name}.`);
         }
@@ -300,4 +341,15 @@ function getAlternateNames(countryName) {
   };
   
   return alternateNames[countryName] || [];
+}
+
+// Helper function to clean up temporary files
+function cleanupTempFile(filePath) {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (error) {
+    console.error("Error cleaning up temp file:", error);
+  }
 }
